@@ -1,0 +1,67 @@
+sequenceDiagram
+    actor Consumer
+    participant MC as Merchant Client
+    participant FC as Forter Client
+    participant MS as Merchant Server
+    participant F as Redactor+Gate
+    participant P as Payments Monolith
+    participant R as Redis
+    participant A as AGW
+    note right of Consumer: Pay!
+    rect rgba(150, 75, 0, .1)
+        MC->>MS: createOrder()
+    end
+    rect rgba(3, 252, 152, .1)
+        MS->>F: /v3/managed/orders/:id (full PAN, transaction data)
+    end
+    note right of MS: use merchant Forter credentials
+    F->>P: /managed/orders/:id (CC token, transaction data)
+    P->>F: /v3/adaptive-auth/3ds/init
+    P->>F: /managed/orders/decision
+    P->>R: Stores decision
+    P->>R: Store request and init response
+    P->>F: Returns if 3DS is not needed
+    F->>MS: Returns result-response (flow ends)
+    P->>P: Issue JWT (if 3DS is needed)
+    P->>F: {managedTransactionToken}
+    F->>MS: 
+    MS->>MC: 
+    rect rgba(3, 252, 152, .1)
+        MC->>FC: handleTransaction(managedTransactionToken, container)
+    end
+    FC->>FC: decode 3DSServerTransId and methodUrl from managedTransactionToken<br>render ACS method URL
+    A-->>FC: data collection completed callback
+    FC->>A: /managed/orders/order + JWT
+    A->>A: verify JWT
+    A->>P: /managed-transaction/order + JWT
+    P->>P: Decode JWT
+    P->>R: fetch init response, original request
+    P->>R: fetch brains decision
+    P->>F: /v3/managed/orders/execute (with brain decision)
+    F->>P: Order Response
+    P->>R: store reponse
+    P->>A: redacted response
+    A->>FC: 
+    opt challenge required
+        FC->>A: /managed-transaction/verify (JWT+CRes)
+        A->>A: verify JWT
+        A->>P: /managed-transaction/verify (JWT+CRes)
+        P->>R: fetch order id
+        P->>F: /v3/adaptive-auth/3ds/verify/:id
+        F->>P: fraud decision + 3DS results
+        P->>R: store response
+        P->>A: (no data)
+        A->>FC: 
+    end
+    FC-->>MC: completed callback (no data)
+    rect rgba(150, 75, 0, .1)
+        MC->>MS: 
+    end
+    rect rgba(3, 252, 152, .1)
+        MS->>F: /get-results (orderId, managedTransactionToken)
+    end
+    F->>P: 
+    P->>R: get results + original request
+    P->>F: 
+    F->> MS: 
+    note right of MS: The merchant will proceed to authorization<br>according to the final status
